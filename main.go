@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -18,21 +19,17 @@ import (
 )
 
 var deleteOriginal = flag.Bool("delete-original-files", false, "Delete original image files after conversion")
+var format = flag.String("format", "cbz", "Archive format (cbz/zip, cbr/rar, cb7z/7z)")
 
 func main() {
 	flag.Parse()
 
 	var dirPath string
 
-	// Check if directory path was provided as command line argument
-	if len(os.Args) > 1 {
-		// Find the first non-flag argument
-		for _, arg := range os.Args[1:] {
-			if !strings.HasPrefix(arg, "-") {
-				dirPath = arg
-				break
-			}
-		}
+	// Get remaining arguments after flag parsing
+	args := flag.Args()
+	if len(args) > 0 {
+		dirPath = args[0]
 	}
 
 	if dirPath == "" {
@@ -44,6 +41,7 @@ func main() {
 	}
 
 	fmt.Printf("Processing directory recursively: %s\n", dirPath)
+	fmt.Printf("Archive format: %s\n", *format)
 	if *deleteOriginal {
 		fmt.Println("WARNING: Original files will be deleted after conversion!")
 	}
@@ -87,10 +85,10 @@ func processDirectoryRecursively(rootPath string) error {
 		fmt.Printf("\nProcessing directory: %s\n", dirPath)
 		fmt.Println("------------------------")
 
-		// Create CBZ for this directory
-		err = createCBZForDirectory(dirPath)
+		// Create archive for this directory
+		err = createArchiveForDirectory(dirPath)
 		if err != nil {
-			fmt.Printf("Error creating CBZ for %s: %v\n", dirPath, err)
+			fmt.Printf("Error creating %s for %s: %v\n", strings.ToUpper(*format), dirPath, err)
 			continue
 		}
 
@@ -108,35 +106,51 @@ func processDirectoryRecursively(rootPath string) error {
 	return nil
 }
 
-func createCBZForDirectory(sourceDir string) error {
-	// Get the parent directory and create cbz filename
+func createArchiveForDirectory(sourceDir string) error {
+	// Get the parent directory and create archive filename
 	parentDir := filepath.Dir(sourceDir)
 	dirName := filepath.Base(sourceDir)
-	cbzPath := filepath.Join(parentDir, dirName+".cbz")
+	archivePath := filepath.Join(parentDir, dirName+"."+*format)
 
-	// Create the zip file
-	zipFile, err := os.Create(cbzPath)
+	// Determine archive type and create accordingly
+	switch strings.ToLower(*format) {
+	case "cbz", "zip":
+		return createZipArchive(sourceDir, archivePath)
+	case "cbr", "rar":
+		return createRarArchive(sourceDir, archivePath)
+	case "cb7z", "7z":
+		return create7zArchive(sourceDir, archivePath)
+	default:
+		// Default to ZIP for unknown formats
+		fmt.Printf("Unknown format '%s', defaulting to ZIP\n", *format)
+		return createZipArchive(sourceDir, archivePath)
+	}
+}
+
+func createZipArchive(sourceDir, archivePath string) error {
+	// Create the archive file
+	archiveFile, err := os.Create(archivePath)
 	if err != nil {
 		return err
 	}
-	defer zipFile.Close()
+	defer archiveFile.Close()
 
 	// Create zip writer
-	zipWriter := zip.NewWriter(zipFile)
+	zipWriter := zip.NewWriter(archiveFile)
 	defer zipWriter.Close()
 
-	// Walk through the directory and add files to zip
+	// Walk through the directory and add files to archive
 	err = filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip directories in the zip
+		// Skip directories in the archive
 		if info.IsDir() {
 			return nil
 		}
 
-		// Create relative path for zip
+		// Create relative path for archive
 		relPath, err := filepath.Rel(sourceDir, path)
 		if err != nil {
 			return err
@@ -144,7 +158,7 @@ func createCBZForDirectory(sourceDir string) error {
 
 		// Check if file is an image
 		if isImageFile(path) {
-			// Convert to WebP and add to zip
+			// Convert to WebP and add to archive
 			err = addImageAsWebPToZip(zipWriter, path, relPath)
 			if err != nil {
 				fmt.Printf("Error converting and adding %s: %v\n", path, err)
@@ -158,7 +172,7 @@ func createCBZForDirectory(sourceDir string) error {
 			}
 		}
 
-		fmt.Printf("  Added to CBZ: %s\n", relPath)
+		fmt.Printf("  Added to %s: %s\n", strings.ToUpper(*format), relPath)
 		return nil
 	})
 
@@ -166,7 +180,59 @@ func createCBZForDirectory(sourceDir string) error {
 		return err
 	}
 
-	fmt.Printf("Created CBZ: %s\n", cbzPath)
+	fmt.Printf("Created %s: %s\n", strings.ToUpper(*format), archivePath)
+	return nil
+}
+
+func createRarArchive(sourceDir, archivePath string) error {
+	// Check if rar command is available
+	_, err := exec.LookPath("rar")
+	if err != nil {
+		return fmt.Errorf("rar command not found. Please install WinRAR or RAR for Linux/Mac")
+	}
+
+	// First create a temporary ZIP with converted images
+	tempZipPath := archivePath + ".temp.zip"
+	err = createZipArchive(sourceDir, tempZipPath)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempZipPath) // Clean up temp file
+
+	// Convert ZIP to RAR using rar command
+	cmd := exec.Command("rar", "a", "-ep1", archivePath, tempZipPath)
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to create RAR archive: %v", err)
+	}
+
+	fmt.Printf("Created %s: %s\n", strings.ToUpper(*format), archivePath)
+	return nil
+}
+
+func create7zArchive(sourceDir, archivePath string) error {
+	// Check if 7z command is available
+	_, err := exec.LookPath("7z")
+	if err != nil {
+		return fmt.Errorf("7z command not found. Please install p7zip")
+	}
+
+	// First create a temporary ZIP with converted images
+	tempZipPath := archivePath + ".temp.zip"
+	err = createZipArchive(sourceDir, tempZipPath)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempZipPath) // Clean up temp file
+
+	// Convert ZIP to 7Z using 7z command
+	cmd := exec.Command("7z", "a", "-t7z", archivePath, tempZipPath)
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to create 7Z archive: %v", err)
+	}
+
+	fmt.Printf("Created %s: %s\n", strings.ToUpper(*format), archivePath)
 	return nil
 }
 
