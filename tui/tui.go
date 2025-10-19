@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,21 @@ type AppState int
 
 const (
 	StateSelectDirectory AppState = iota
+	StateSelectMode               // New state for mode detection
+	StateSelectItems              // New state for selecting items (files or directories)
 	StateSelectFormat
 	StateProcessing
 	StateComplete
 	StateError
+)
+
+// OperationMode represents the mode of operation (files or directories)
+type OperationMode int
+
+const (
+	ModeUnknown     OperationMode = iota
+	ModeDirectories               // Directory selection mode
+	ModeFiles                     // File selection mode
 )
 
 // Model represents the application state
@@ -41,6 +53,18 @@ type Model struct {
 	processedFiles int
 	totalFiles     int
 	conversionLog  []string
+
+	// New fields for mode-based operation
+	operationMode  OperationMode
+	availableItems []string        // List of available files or directories
+	selectedItems  map[string]bool // Map of selected items
+	itemStartIndex int             // For scrolling through items
+	itemsPerPage   int             // Number of items to display per page
+
+	// Preview system
+	previewContent string // Current preview content
+	previewType    string // Type of preview (image, text, video, etc.)
+	showPreview    bool   // Whether to show preview panel
 }
 
 // InitialModel returns the initial state of the application
@@ -51,11 +75,56 @@ func InitialModel() Model {
 		selectedFormat: "CBZ (ZIP)",
 		deleteOriginal: false,
 		cursor:         0,
+		operationMode:  ModeUnknown,
+		selectedItems:  make(map[string]bool),
+		itemsPerPage:   10,
 	}
 }
 
 // Init implements the tea.Model interface
 func (m Model) Init() tea.Cmd {
+	return nil
+}
+
+// determineOperationMode scans the directory to determine if it contains only files or only directories
+func (m *Model) determineOperationMode() error {
+	hasFiles := false
+	hasDirs := false
+	m.availableItems = []string{} // Reset available items
+
+	entries, err := os.ReadDir(m.directoryPath)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		// Skip hidden files and directories
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		if entry.IsDir() {
+			hasDirs = true
+			m.availableItems = append(m.availableItems, entry.Name())
+		} else {
+			hasFiles = true
+			m.availableItems = append(m.availableItems, entry.Name())
+		}
+
+		// If we find both files and directories, we can stop
+		if hasFiles && hasDirs {
+			return fmt.Errorf("directory contains both files and directories - please choose a directory with only files or only directories")
+		}
+	}
+
+	if hasDirs {
+		m.operationMode = ModeDirectories
+	} else if hasFiles {
+		m.operationMode = ModeFiles
+	} else {
+		return fmt.Errorf("directory is empty")
+	}
+
 	return nil
 }
 
@@ -65,6 +134,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.itemsPerPage = (m.height - 10) // Adjust items per page based on window height
+		if m.itemsPerPage < 5 {
+			m.itemsPerPage = 5 // Minimum items to show
+		}
 		return m, nil
 
 	case DirectoryCountMsg:
@@ -90,21 +163,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentDirName = filepath.Base(msg.Directories[msg.CurrentIndex])
 		m.processingMsg = fmt.Sprintf("Processing %s...", filepath.Base(msg.Directories[msg.CurrentIndex]))
 
-		// Process this directory
-		dirPath := msg.Directories[msg.CurrentIndex]
+		// Process this item
+		itemPath := msg.Directories[msg.CurrentIndex]
 		format := strings.ToLower(strings.Split(m.selectedFormat, " ")[0])
-		parentDir := filepath.Dir(dirPath)
-		dirName := filepath.Base(dirPath)
-		archivePath := filepath.Join(parentDir, dirName+"."+format)
 
-		// Create the archive (silent version)
-		err := CreateSilentZipArchive(dirPath, archivePath)
+		var err error
+		if m.operationMode == ModeDirectories {
+			// Process directory
+			parentDir := filepath.Dir(itemPath)
+			dirName := filepath.Base(itemPath)
+			archivePath := filepath.Join(parentDir, dirName+"."+format)
+
+			// Create the archive (silent version)
+			err = CreateSilentZipArchive(itemPath, archivePath)
+		} else {
+			// Process files
+			// Create a temporary directory to hold the files
+			tempDir, tempErr := os.MkdirTemp("", "cbz-temp-*")
+			if tempErr != nil {
+				m.state = StateError
+				m.errorMsg = fmt.Sprintf("Failed to create temp directory: %v", tempErr)
+				return m, nil
+			}
+			defer os.RemoveAll(tempDir)
+
+			// Copy selected files to temp directory
+			destPath := filepath.Join(tempDir, filepath.Base(itemPath))
+			if err := copyFile(itemPath, destPath); err != nil {
+				m.state = StateError
+				m.errorMsg = fmt.Sprintf("Failed to copy file: %v", err)
+				return m, nil
+			}
+
+			// Create archive from temp directory
+			// Use the directory name as the archive name
+			archiveName := filepath.Base(m.directoryPath)
+			archivePath := filepath.Join(m.directoryPath, archiveName+"."+format)
+			err = CreateSilentZipArchive(tempDir, archivePath)
+		}
+
 		completedDirs := msg.CompletedDirs
 		if err == nil {
-			completedDirs = append(completedDirs, dirPath)
-			// Delete the directory if flag is set
+			completedDirs = append(completedDirs, itemPath)
+			// Delete the original if flag is set
 			if m.deleteOriginal {
-				os.RemoveAll(dirPath)
+				os.RemoveAll(itemPath)
 			}
 		}
 
@@ -146,6 +249,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateSelectDirectory:
 			return m.updateDirectorySelection(msg)
+		case StateSelectItems:
+			return m.updateItemSelection(msg)
 		case StateSelectFormat:
 			return m.updateFormatSelection(msg)
 		case StateProcessing:
@@ -163,6 +268,8 @@ func (m Model) View() string {
 	switch m.state {
 	case StateSelectDirectory:
 		return m.viewDirectorySelection()
+	case StateSelectItems:
+		return m.viewItemSelection()
 	case StateSelectFormat:
 		return m.viewFormatSelection()
 	case StateProcessing:
@@ -189,7 +296,16 @@ func (m Model) updateDirectorySelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errorMsg = fmt.Sprintf("Directory does not exist: %s", m.directoryPath)
 				return m, nil
 			}
-			m.state = StateSelectFormat
+
+			// Determine operation mode
+			if err := m.determineOperationMode(); err != nil {
+				m.state = StateError
+				m.errorMsg = err.Error()
+				return m, nil
+			}
+
+			m.state = StateSelectItems
+			m.cursor = 0 // Reset cursor for item selection
 		}
 	case "backspace":
 		if len(m.directoryPath) > 0 {
@@ -253,26 +369,20 @@ func (m Model) startProcessing() tea.Cmd {
 	return m.countDirectories()
 }
 
-// countDirectories counts the total directories to process
+// countDirectories counts the total directories or files to process
 func (m Model) countDirectories() tea.Cmd {
 	return func() tea.Msg {
-		totalDirs := 0
-		var directories []string
+		var items []string
 
-		filepath.Walk(m.directoryPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() && path != m.directoryPath {
-				totalDirs++
-				directories = append(directories, path)
-			}
-			return nil
-		})
+		// Add selected items to process
+		for item := range m.selectedItems {
+			fullPath := filepath.Join(m.directoryPath, item)
+			items = append(items, fullPath)
+		}
 
 		return DirectoryCountMsg{
-			TotalDirs:   totalDirs,
-			Directories: directories,
+			TotalDirs:   len(items),
+			Directories: items,
 		}
 	}
 }
@@ -510,6 +620,146 @@ func (m Model) viewComplete() string {
 			help,
 		),
 	)
+}
+
+// updateItemSelection handles input during item selection
+func (m Model) updateItemSelection(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+			// Adjust start index if cursor moves above visible area
+			if m.cursor < m.itemStartIndex {
+				m.itemStartIndex = m.cursor
+			}
+		}
+	case "down", "j":
+		if m.cursor < len(m.availableItems)-1 {
+			m.cursor++
+			// Adjust start index if cursor moves below visible area
+			if m.cursor >= m.itemStartIndex+m.itemsPerPage {
+				m.itemStartIndex = m.cursor - m.itemsPerPage + 1
+			}
+		}
+	case "space", " ":
+		// Toggle selection of current item
+		if m.cursor >= 0 && m.cursor < len(m.availableItems) {
+			currentItem := m.availableItems[m.cursor]
+			if m.selectedItems[currentItem] {
+				delete(m.selectedItems, currentItem)
+			} else {
+				m.selectedItems[currentItem] = true
+			}
+		}
+	case "enter":
+		// Only proceed if at least one item is selected
+		if len(m.selectedItems) > 0 {
+			m.state = StateSelectFormat
+		}
+	case "a":
+		// Select all items
+		for _, item := range m.availableItems {
+			m.selectedItems[item] = true
+		}
+	case "n":
+		// Deselect all items
+		m.selectedItems = make(map[string]bool)
+	}
+	return m, nil
+}
+
+// viewItemSelection renders the item selection screen
+func (m Model) viewItemSelection() string {
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("205")).
+		Render("📁 CBZ WebP Converter")
+
+	modeText := "Select directories to archive"
+	if m.operationMode == ModeFiles {
+		modeText = "Select files to include in archive"
+	}
+
+	instruction := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render(modeText)
+
+	// Calculate visible items
+	endIndex := m.itemStartIndex + m.itemsPerPage
+	if endIndex > len(m.availableItems) {
+		endIndex = len(m.availableItems)
+	}
+	visibleItems := m.availableItems[m.itemStartIndex:endIndex]
+
+	// Build the list of items
+	var itemList []string
+	for i, item := range visibleItems {
+		cursor := " "
+		if m.itemStartIndex+i == m.cursor {
+			cursor = ">"
+		}
+
+		checkbox := "[ ]"
+		if m.selectedItems[item] {
+			checkbox = "[✓]"
+		}
+
+		itemText := fmt.Sprintf("%s %s %s", cursor, checkbox, item)
+		if m.itemStartIndex+i == m.cursor {
+			itemText = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("205")).
+				Render(itemText)
+		}
+		itemList = append(itemList, itemText)
+	}
+
+	items := lipgloss.JoinVertical(lipgloss.Left, itemList...)
+
+	// Show scrollbar if needed
+	if len(m.availableItems) > m.itemsPerPage {
+		scrollPosition := fmt.Sprintf("(%d/%d)", m.cursor+1, len(m.availableItems))
+		items = lipgloss.JoinHorizontal(lipgloss.Top, items, "  ", scrollPosition)
+	}
+
+	selectedCount := fmt.Sprintf("Selected: %d/%d", len(m.selectedItems), len(m.availableItems))
+
+	help := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render("↑/↓: Navigate • Space: Toggle • a: Select All • n: None • Enter: Continue • Ctrl+c/q: Quit")
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		lipgloss.JoinVertical(lipgloss.Center,
+			title,
+			"",
+			instruction,
+			"",
+			items,
+			"",
+			selectedCount,
+			"",
+			help,
+		),
+	)
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	return err
 }
 
 // viewError renders the error screen
