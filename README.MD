@@ -34,6 +34,18 @@ A terminal-based tool for converting image collections into compressed CBZ/CBR/C
 
 ## Installation
 
+### Pre-built Binaries (Recommended)
+
+Download the latest release from the [Releases page](https://github.com/yourusername/cbz-webp-converter/releases). Pre-built binaries are available for:
+
+- **Linux**: AMD64 and ARM64
+- **Windows**: AMD64 and ARM64  
+- **macOS**: AMD64 and ARM64 (Apple Silicon)
+
+Simply download the appropriate binary for your platform and run it directly.
+
+### Building from Source
+
 **Prerequisites**
 - Go 1.24 or later installed on your system
 - A terminal that supports TUI applications (most modern terminals work)
@@ -60,6 +72,16 @@ go build -o cbz-converter main.go
 ```bash
 ./cbz-converter
 ```
+
+**Cross-platform Building**
+
+Use the provided build script to create binaries for all supported platforms:
+
+```bash
+./build.sh
+```
+
+This will create binaries in the `build/` directory for all supported platforms.
 
 ## Usage
 
@@ -188,6 +210,38 @@ The tool automatically handles batch processing when multiple directories are se
 - Archive Formats: CBZ (ZIP), CBR (RAR), CB7Z (7-Zip)
 - Other Files: Any file type (preserved as-is)
 
+## Development
+
+### GitHub Actions
+
+This project uses GitHub Actions for automated building and releasing:
+
+- **Test Workflow**: Runs on every push and pull request to test the code and ensure it builds
+- **Release Workflow**: Automatically builds binaries for all platforms and creates releases when you push a tag
+
+### Creating a Release
+
+1. Make sure all changes are committed and pushed
+2. Create and push a version tag:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+3. GitHub Actions will automatically:
+   - Build binaries for Linux (AMD64, ARM64), Windows (AMD64, ARM64), and macOS (AMD64, ARM64)
+   - Create a GitHub release with all the binaries
+   - Generate release notes automatically
+
+### Local Development
+
+Use the provided build script for local cross-platform testing:
+
+```bash
+./build.sh
+```
+
+This builds the application for all supported platforms in the `build/` directory.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
@@ -196,8 +250,10 @@ Contributions are welcome! Please feel free to submit issues, feature requests, 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test thoroughly
+4. Test thoroughly using `./build.sh`
 5. Submit a pull request
+
+The GitHub Actions will automatically test your changes when you create a pull request.
 
 ## License
 
