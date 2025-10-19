@@ -49,6 +49,10 @@ Simply download the appropriate binary for your platform and run it directly.
 **Prerequisites**
 - Go 1.24 or later installed on your system
 - A terminal that supports TUI applications (most modern terminals work)
+- WebP development libraries (for building from source):
+  - **macOS**: `brew install webp pkg-config`
+  - **Ubuntu/Debian**: `sudo apt-get install libwebp-dev pkg-config`
+  - **Windows**: No additional setup required
 
 **Steps**
 

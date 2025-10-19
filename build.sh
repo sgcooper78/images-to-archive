@@ -13,6 +13,12 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Building CBZ WebP Converter for multiple platforms...${NC}"
 
+# Check if WebP library is available
+if ! pkg-config --exists libwebp; then
+    echo -e "${YELLOW}Warning: libwebp not found. Some builds may fail.${NC}"
+    echo -e "${YELLOW}Install with: brew install webp (macOS) or apt-get install libwebp-dev (Ubuntu)${NC}"
+fi
+
 # Create build directory
 mkdir -p build
 cd build
@@ -38,7 +44,7 @@ for platform in "${platforms[@]}"; do
         ext=""
     fi
     
-    GOOS=$os GOARCH=$arch go build -ldflags="-s -w" -o "cbz-converter-$os-$arch$ext" ../main.go
+    CGO_ENABLED=1 GOOS=$os GOARCH=$arch go build -ldflags="-s -w" -o "cbz-converter-$os-$arch$ext" ../main.go
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Built cbz-converter-$os-$arch$ext${NC}"
