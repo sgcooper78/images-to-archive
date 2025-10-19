@@ -60,7 +60,7 @@ type Model struct {
 	selectedItems  map[string]bool // Map of selected items
 	itemStartIndex int             // For scrolling through items
 	itemsPerPage   int             // Number of items to display per page
-	
+
 	// Preview system
 	previewContent string // Current preview content
 	previewType    string // Type of preview (image, text, video, etc.)
@@ -196,7 +196,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Create archive from temp directory
-			archiveName := "archive" // You might want to make this configurable
+			// Use the directory name as the archive name
+			archiveName := filepath.Base(m.directoryPath)
 			archivePath := filepath.Join(m.directoryPath, archiveName+"."+format)
 			err = CreateSilentZipArchive(tempDir, archivePath)
 		}
