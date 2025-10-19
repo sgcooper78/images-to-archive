@@ -2,143 +2,127 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - master
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*'  # Triggers on version tags like v1.0.0
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
+    name: Build for ${{ matrix.goos }} (${{ matrix.goarch }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
+            arch: amd64
             goos: linux
             goarch: amd64
-            ext: ""
-          - os: ubuntu-latest
+          - os: ubuntu-22.04-arm64
+            arch: arm64
             goos: linux
             goarch: arm64
-            ext: ""
           - os: windows-latest
+            arch: amd64
             goos: windows
             goarch: amd64
-            ext: ".exe"
           - os: windows-latest
+            arch: arm64
             goos: windows
             goarch: arm64
-            ext: ".exe"
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-            ext: ""
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-            ext: ""
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.2'
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.2'
 
-      - name: Install system dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebp-dev pkg-config
+    - name: Install dependencies (Linux)
+      if: matrix.goos == 'linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebp-dev pkg-config
 
-      - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew install webp pkg-config
+    - name: Install dependencies (Windows)
+      if: matrix.goos == 'windows'
+      run: |
+        # Install WebP library for Windows
+        choco install webp -y
 
-      - name: Install system dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          echo "Windows build - no additional dependencies needed"
+    - name: Build binary
+      env:
+        CGO_ENABLED: 1
+      run: |
+        go build -ldflags="-s -w" -o "cbz-converter-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}" main.go
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Verify dependencies
-        run: go mod verify
-
-      - name: Build
-        run: |
-          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o cbz-converter${{ matrix.ext }} main.go
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cbz-converter-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: cbz-converter${{ matrix.ext }}
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cbz-converter-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: cbz-converter-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
 
-      - name: Prepare release assets
-        run: |
-          mkdir -p release
-          cd artifacts
+    - name: Prepare release assets
+      run: |
+        mkdir -p release
+        # Copy all binaries to release directory
+        find ./artifacts -name "cbz-converter-*" -type f -exec cp {} ./release/ \;
+        
+        # Create checksums
+        cd release
+        sha256sum * > checksums.txt
+        
+        # List files for verification
+        ls -la
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          release/*
+        body: |
+          ## CBZ WebP Converter Release
           
-          # Move and rename files for better organization
-          for dir in */; do
-            if [ -d "$dir" ]; then
-              cd "$dir"
-              for file in *; do
-                if [ -f "$file" ]; then
-                  # Extract OS and arch from directory name
-                  os_arch=$(echo "$dir" | sed 's/cbz-converter-\(.*\)-\(.*\)/\1-\2/')
-                  # Create a more descriptive filename
-                  new_name="cbz-converter-${os_arch}${file##cbz-converter}"
-                  cp "$file" "../../release/$new_name"
-                fi
-              done
-              cd ..
-            fi
-          done
+          This release contains pre-built binaries for Linux and Windows platforms.
           
-          # Create a checksums file
-          cd ../release
-          sha256sum * > checksums.txt
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ### Downloads
+          - **Linux (amd64)**: `cbz-converter-linux-amd64`
+          - **Linux (arm64)**: `cbz-converter-linux-arm64`
+          - **Windows (amd64)**: `cbz-converter-windows-amd64.exe`
+          - **Windows (arm64)**: `cbz-converter-windows-arm64.exe`
+          
+          ### Usage
+          1. Download the appropriate binary for your platform
+          2. Make it executable (Linux): `chmod +x cbz-converter-linux-amd64`
+          3. Run the application: `./cbz-converter-linux-amd64` or `cbz-converter-windows-amd64.exe`
+          
+          ### Features
+          - Interactive TUI interface
+          - CBZ to WebP conversion
+          - Cross-platform support
+          
+          ### Verification
+          Verify file integrity using the provided checksums:
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
