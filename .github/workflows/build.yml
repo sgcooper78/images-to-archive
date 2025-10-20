@@ -21,6 +21,14 @@ jobs:
             arch: arm64
             goos: linux
             goarch: arm64
+          - os: macos-latest
+            arch: amd64
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            arch: arm64
+            goos: darwin
+            goarch: arm64
           - os: windows-latest
             arch: amd64
             goos: windows
@@ -44,6 +52,11 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y libwebp-dev pkg-config
+
+    - name: Install dependencies (macOS)
+      if: matrix.goos == 'darwin'
+      run: |
+        brew install webp
 
     - name: Install dependencies (Windows)
       if: matrix.goos == 'windows'
@@ -106,13 +119,15 @@ jobs:
           ### Downloads
           - **Linux (amd64)**: `cbz-converter-linux-amd64`
           - **Linux (arm64)**: `cbz-converter-linux-arm64`
+          - **macOS (amd64)**: `cbz-converter-darwin-amd64`
+          - **macOS (arm64)**: `cbz-converter-darwin-arm64`
           - **Windows (amd64)**: `cbz-converter-windows-amd64.exe`
           - **Windows (arm64)**: `cbz-converter-windows-arm64.exe`
           
           ### Usage
           1. Download the appropriate binary for your platform
-          2. Make it executable (Linux): `chmod +x cbz-converter-linux-amd64`
-          3. Run the application: `./cbz-converter-linux-amd64` or `cbz-converter-windows-amd64.exe`
+          2. Make it executable (Linux/macOS): `chmod +x cbz-converter-linux-amd64` or `chmod +x cbz-converter-darwin-arm64`
+          3. Run the application: `./cbz-converter-linux-amd64`, `./cbz-converter-darwin-arm64`, or `cbz-converter-windows-amd64.exe`
           
           ### Features
           - Interactive TUI interface
